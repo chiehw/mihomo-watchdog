@@ -4,6 +4,9 @@
  *
  * env: MIHOMO_API MIHOMO_PROXY MIHOMO_SECRET_FILE MIHOMO_CONFIG
  *      MIHOMO_RELOAD_PATH MIHOMO_LOG_LEVEL BARK_KEY BARK_GROUP
+ *      BARK_DEVICE BARK_TITLE BARK_BODY
+ *      工作目录文件：bark-device / bark-title / bark-body
+ *      模板变量：{device} {group} {old} {new}
  *
  * 日志来自 mihomo GET /logs WebSocket，不是 docker logs。
  */
@@ -82,6 +85,9 @@ typedef struct {
     char log_level[16];
     char bark_key[128];
     char bark_group[64];
+    char bark_device[64];
+    char bark_title[192];
+    char bark_body[256];
     int interval;
     int window;
     int fails;
@@ -817,7 +823,7 @@ static const char *classify(const char *err) {
 }
 
 static int fail_type_ok(const char *t) {
-    return !strcmp(t, "timeout") || !strcmp(t, "eof") || !strcmp(t, "tls") || !strcmp(t, "reset") || !strcmp(t, "ssl");
+    return !strcmp(t, "timeout") || !strcmp(t, "eof") || !strcmp(t, "tls") || !strcmp(t, "reset") || !strcmp(t, "ssl") || !strcmp(t, "dns");
 }
 
 static int parse_dial(const char *line, char *group, size_t gcap, char *err, size_t ecap) {
@@ -1208,13 +1214,51 @@ static int probe_default_https(char *err, size_t errcap) {
     return 0;
 }
 
+static void tmpl_expand(char *dst, size_t cap, const char *tmpl,
+                        const char *device, const char *group,
+                        const char *old, const char *nw) {
+    size_t o = 0;
+    for (const char *p = tmpl; *p && o + 1 < cap;) {
+        if (*p == '{') {
+            const char *end = strchr(p, '}');
+            if (end) {
+                size_t klen = (size_t)(end - (p + 1));
+                const char *val = NULL;
+                if (klen == 6 && !memcmp(p + 1, "device", 6))
+                    val = device ? device : "";
+                else if (klen == 5 && !memcmp(p + 1, "group", 5))
+                    val = group ? group : "";
+                else if (klen == 3 && !memcmp(p + 1, "old", 3))
+                    val = old ? old : "";
+                else if (klen == 3 && !memcmp(p + 1, "new", 3))
+                    val = nw ? nw : "";
+                if (val) {
+                    size_t vl = strlen(val);
+                    if (o + vl >= cap)
+                        vl = cap - 1 - o;
+                    memcpy(dst + o, val, vl);
+                    o += vl;
+                    p = end + 1;
+                    continue;
+                }
+            }
+        }
+        dst[o++] = *p++;
+    }
+    dst[o] = 0;
+}
+
 static void notify_switch(const char *gname, const char *old, const char *nw) {
     if (!cfg.bark_key[0])
         return;
-    char ek[256], et[128], eb[1024], eg[128], url[1600];
-    char title[] = "mihomo 切换";
+    char ek[256], et[256], eb[1024], eg[128], url[1600];
+    char title[256];
     char body[512];
-    snprintf(body, sizeof body, "%s: %s → %s", gname, old, nw);
+    const char *title_tmpl = cfg.bark_title[0] ? cfg.bark_title
+        : (cfg.bark_device[0] ? "{device} | mihomo 切换" : "mihomo 切换");
+    const char *body_tmpl = cfg.bark_body[0] ? cfg.bark_body : "{group}: {old} → {new}";
+    tmpl_expand(title, sizeof title, title_tmpl, cfg.bark_device, gname, old, nw);
+    tmpl_expand(body, sizeof body, body_tmpl, cfg.bark_device, gname, old, nw);
     urlenc(cfg.bark_key, ek, sizeof ek);
     urlenc(title, et, sizeof et);
     urlenc(body, eb, sizeof eb);
@@ -1885,6 +1929,29 @@ static void parse_api(const char *api) {
     }
 }
 
+static void load_optional_text(char *dst, size_t cap, const char *path) {
+    if (dst[0])
+        return;
+    char *s = read_file(path, NULL);
+    if (!s)
+        return;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
+        *--e = 0;
+    char *p = s;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p)
+        snprintf(dst, cap, "%s", p);
+    free(s);
+}
+
+static void load_bark_text(void) {
+    load_optional_text(cfg.bark_device, sizeof cfg.bark_device, "bark-device");
+    load_optional_text(cfg.bark_title, sizeof cfg.bark_title, "bark-title");
+    load_optional_text(cfg.bark_body, sizeof cfg.bark_body, "bark-body");
+}
+
 static void load_secret(void) {
     char *s = read_file(cfg.secret, NULL);
     if (!s)
@@ -1922,8 +1989,12 @@ int main(int argc, char **argv) {
     env_or(cfg.log_level, sizeof cfg.log_level, "MIHOMO_LOG_LEVEL", "warning");
     env_or(cfg.bark_key, sizeof cfg.bark_key, "BARK_KEY", "");
     env_or(cfg.bark_group, sizeof cfg.bark_group, "BARK_GROUP", "mihomo");
+    env_or(cfg.bark_device, sizeof cfg.bark_device, "BARK_DEVICE", "");
+    env_or(cfg.bark_title, sizeof cfg.bark_title, "BARK_TITLE", "");
+    env_or(cfg.bark_body, sizeof cfg.bark_body, "BARK_BODY", "");
     parse_api(apiurl);
     load_secret();
+    load_bark_text();
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--interval") && i + 1 < argc)
             cfg.interval = atoi(argv[++i]);
