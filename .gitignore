@@ -1,2 +1,3 @@
 mihomo-watchdog
 *.o
+test_watchdog

@@ -40,10 +40,9 @@
 #define BODY_MAX (8 * 1024 * 1024)
 #define WS_BUF (64 * 1024)
 
-static const char *DEFAULT_GROUP = "🚀 默认代理";
 static const char *CURSOR_GROUP = "🤖 Cursor自动";
+static const char *AUTO_GROUP = "🤖 自动";
 static const char *AUTO_SUFFIX = "自动";
-static const char *HEALTH_URL = "https://cp.cloudflare.com/generate_204";
 static const char *GROUP_TYPES[] = {"Selector", "URLTest", "Fallback", "LoadBalance", NULL};
 static const char *WATCH_SKIP[] = {
     "🤖 AGY 美国自动",
@@ -819,11 +818,13 @@ static const char *classify(const char *err) {
         return "reset";
     if (strcasestr(err, "refused"))
         return "refused";
+    if (strcasestr(err, "not found") || strcasestr(err, "not exist"))
+        return "missing";
     return "other";
 }
 
 static int fail_type_ok(const char *t) {
-    return !strcmp(t, "timeout") || !strcmp(t, "eof") || !strcmp(t, "tls") || !strcmp(t, "reset") || !strcmp(t, "ssl") || !strcmp(t, "dns");
+    return !strcmp(t, "timeout") || !strcmp(t, "eof") || !strcmp(t, "tls") || !strcmp(t, "reset") || !strcmp(t, "ssl") || !strcmp(t, "dns") || !strcmp(t, "missing");
 }
 
 static int parse_dial(const char *line, char *group, size_t gcap, char *err, size_t ecap) {
@@ -1201,19 +1202,6 @@ static int run_curl(char *const argv[], char *err, size_t errcap) {
     return -1;
 }
 
-static int probe_default_https(char *err, size_t errcap) {
-    char *argv[] = {
-        "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code} %{errormsg}",
-        "--max-time", "8", "-x", cfg.proxy, (char *)HEALTH_URL, NULL,
-    };
-    int rc = run_curl(argv, err, errcap);
-    if (rc == 0)
-        return 1;
-    if (err && !err[0])
-        snprintf(err, errcap, "curl-exit-%d", rc);
-    return 0;
-}
-
 static void tmpl_expand(char *dst, size_t cap, const char *tmpl,
                         const char *device, const char *group,
                         const char *old, const char *nw) {
@@ -1436,20 +1424,21 @@ static const char *resolve_watch_group(const char *dial, Catalog *cat, char watc
     return name;
 }
 
+/* 仅纳管 Selector 站点自动组，避免对 Fallback 组发 PUT 回弹，也不抢夺默认代理的内核自动回切 */
 static int auto_groups(Catalog *cat, char watched[][MAX_NAME]) {
     int n = 0;
     for (int i = 0; i < cat->n && n < MAX_WATCHED; i++) {
         Group *g = &cat->items[i];
         if (!ends_with(g->name, AUTO_SUFFIX))
             continue;
+        if (!strcmp(g->name, AUTO_GROUP))
+            continue;
         if (in_list(g->name, WATCH_SKIP))
             continue;
-        if (!is_group_type(g->type))
+        if (!g->type || strcmp(g->type, "Selector") != 0)
             continue;
         snprintf(watched[n++], MAX_NAME, "%s", g->name);
     }
-    if (find_group(cat, DEFAULT_GROUP) && !watched_has(watched, n, DEFAULT_GROUP) && n < MAX_WATCHED)
-        snprintf(watched[n++], MAX_NAME, "%s", DEFAULT_GROUP);
     return n;
 }
 
@@ -1828,12 +1817,6 @@ static void tick(void) {
         return;
     }
     count_log_fails(&cat, watched, nwatch);
-    char perr[256];
-    if (!probe_default_https(perr, sizeof perr)) {
-        printf("probe-fail %s %s\n", DEFAULT_GROUP, perr);
-        fflush(stdout);
-        add_fail(DEFAULT_GROUP, cfg.fails);
-    }
     time_t now_ts = time(NULL);
     for (int i = 0; i < nwatch; i++) {
         const char *gname = watched[i];

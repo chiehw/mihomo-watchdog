@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: make
+      - name: Test
+        run: make test
       - name: Smoke
         run: ./mihomo-watchdog -h
       - name: Upload artifact

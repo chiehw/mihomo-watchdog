@@ -31,9 +31,9 @@ push / PR 跑 `make`。打 `v*` tag 会发 GitHub Release（linux-amd64 二进�
 | `--dry-run` | 关 | 只打印，不切、不改 yaml |
 | `--no-close-cursor` | 关 | 切 `🤖 Cursor自动` 时不断已死连接 |
 
-不传 `--group` 时：名字以 `自动` 结尾的 Selector / URLTest / Fallback / LoadBalance，外加 `🚀 默认代理`。跳过 `🤖 AGY 美国自动`、`♻️ 自动选择`、`🌐 IPv6 自动`。
+不传 `--group` 时：只纳管名字以 `自动` 结尾的 `Selector` 站点组（不含 `🤖 自动` 与各 `♻️ 地区自动` Fallback 组，也不接管 `🚀 默认代理`）。跳过 `🤖 AGY 美国自动`、`♻️ 自动选择`、`🌐 IPv6 自动`。
 
-默认出口每轮还会探 `https://cp.cloudflare.com/generate_204`。TLS / `SSL_ERROR_SYSCALL` / 超时当场加满阈值，叶子多时会连切。
+默认出口平时走 `🤖 自动` 地区 Fallback 链，由 mihomo 内核自动切区与恢复回切；看门狗不再每轮主动探活切默认代理。
 
 ## 环境变量
 
@@ -108,7 +108,7 @@ WantedBy=multi-user.target
 2. PUT 弹回（常见于 fallback 组）：把当前叶子从该组 `filter` 拿掉，备份 `config.yaml.bak.<时间戳>`，再 `PUT /configs?force=true`。
 3. 切 `🤖 Cursor自动` 时默认断开已死旧连接。
 
-站点组和默认代理用 **select**，不要用 fallback 当 watchdog 切目标。
+被看门狗纳管的站点组用 **select**，不要用 fallback 当 watchdog 切目标。
 
 ## 不要
 
